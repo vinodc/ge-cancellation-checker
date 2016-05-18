@@ -1,13 +1,34 @@
-#!/usr/bin/python
+#!/usr/bin/env python
 
 # Note: for setting up email with sendmail, see: http://linuxconfig.org/configuring-gmail-as-sendmail-email-relay
 
 from subprocess import check_output
 from datetime import datetime
-from os import path
+import os
 import sys, smtplib, json
 
-PWD = path.dirname(sys.argv[0]) 
+PWD = os.path.dirname(sys.argv[0])
+
+import logging
+import logging.handlers
+
+logger = logging.getLogger('ge-checker')
+for path in ['/var/run/syslog', '/dev/log']:
+    if os.path.exists(path):
+        handler = logging.handlers.SysLogHandler(address=path)
+        break
+else:
+    handler = logging.handlers.SysLogHandler()
+
+formatstring = ('[%(asctime)s][%(levelname)s][%(name)s]'
+                '[%(process)d %(processName)s]'
+                '[%(funcName)s (line %(lineno)d)]'
+                '%(message)s')
+formatter = logging.Formatter(formatstring)
+handler.setFormatter(formatter)
+
+logger.setLevel(logging.DEBUG)
+logger.addHandler(handler)
 
 # Get settings
 try:
@@ -21,11 +42,8 @@ except Exception as e:
 if not 'current_interview_date_str' in settings or not settings['current_interview_date_str']:
     print 'Missing current_interview_date_str in config'
     sys.exit()
-if not 'email_from' in settings or not settings['email_from']:
-    print 'Missing from address in config'
-    sys.exit()
-if not 'email_to' in settings or not settings['email_to']:
-    print 'Missing to address in config'
+if not 'email' in settings or not settings['email']:
+    print 'Missing email data in config'
     sys.exit()
 if not 'init_url' in settings or not settings['init_url']:
     print 'Missing initial URL in config'
@@ -42,14 +60,8 @@ if not 'password' in settings or not settings['password']:
 
 CURRENT_INTERVIEW_DATE = datetime.strptime(settings['current_interview_date_str'], '%B %d, %Y')
 
-def log(msg):
-    print msg
-
-    if not 'logfile' in settings or not settings['logfile']: return
-    with open(settings['logfile'], 'a') as logfile:
-        logfile.write('%s: %s\n' % (datetime.now(), msg))
-
 def send_apt_available_email(current_apt, avail_apt):
+    esets = settings.get('email', {})
     message = """From: %s
 To: %s
 Subject: Alert: New Global Entry Appointment Available
@@ -60,14 +72,18 @@ Content-Type: text/html
 <p>If this sounds good, please sign in to https://goes-app.cbp.dhs.gov/main/goes to reschedule.</p>
 
 <p>If you reschedule, please remember to update CURRENT_INTERVIEW_DATE in your config.json file.</p>
-""" % (settings['email_from'], ', '.join(settings['email_to']), avail_apt.strftime('%B %d, %Y'), current_apt.strftime('%B %d, %Y'))
+""" % (esets['from'], ', '.join(esets['to']), avail_apt.strftime('%B %d, %Y'), current_apt.strftime('%B %d, %Y'))
 
     try:
-        server = smtplib.SMTP('localhost')
-        server.sendmail(settings['email_from'], settings['email_to'], message)
+        server = smtplib.SMTP(host=esets.get('host', 'localhost'), port=esets.get('port', 0))
+        if esets.get('tls'):
+            server.starttls()
+        if esets.get('user'):
+            server.login(esets['user'], esets['password'])
+        server.sendmail(esets['from'], esets['to'], message)
         server.quit()
     except Exception as e:
-        log('Failed to send success email')
+        logger.exception('Failed to send success email: %s' % e)
 
 
 
@@ -76,11 +92,11 @@ new_apt_str = new_apt_str.strip()
 
 try: new_apt = datetime.strptime(new_apt_str, '%B %d, %Y')
 except ValueError as e:
-    log('%s' % new_apt_str)
+    logger.exception('%s: %s' % (new_apt_str, e))
     sys.exit()
 
 if new_apt < CURRENT_INTERVIEW_DATE: # new appointment is newer than existing!
     send_apt_available_email(CURRENT_INTERVIEW_DATE, new_apt)   
-    log('Found new appointment on %s (current is on %s)!' % (new_apt, CURRENT_INTERVIEW_DATE))
+    logger.info('Found new appointment on %s (current is on %s)!' % (new_apt, CURRENT_INTERVIEW_DATE))
 else:
-    log('No new appointments. Next available on %s (current is on %s)' % (new_apt, CURRENT_INTERVIEW_DATE))
+    logger.debug('No new appointments. Next available on %s (current is on %s)' % (new_apt, CURRENT_INTERVIEW_DATE))

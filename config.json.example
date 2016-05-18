@@ -1,9 +1,10 @@
 {
     "current_interview_date_str": "",
-    "logfile": "",
-     
-    "email_from": "",
-    "email_to": [],
+
+    "email": {
+        "from", "",
+        "to": [],
+    },
      
     "username": "", 
     "password": "",
